@@ -351,7 +351,7 @@ local function set_breakpoint(file, line, condition)
   elseif iscasepreserving then file = string.lower(file) end
   if not breakpoints[line] then breakpoints[line] = {} end
   if condition ~= nil and condition ~= "" then
-    condition = loadstring("return "..condition)
+    condition = tonumber(condition) and tonumber(condition) or loadstring("return "..condition)
   else condition = nil end
   breakpoints[line][file] = condition and  condition or true
 end
@@ -367,16 +367,20 @@ end
 
 local capture_vars
 local function has_breakpoint(file, line)
-  local hit = breakpoints[line]
-          and breakpoints[line][iscasepreserving and string.lower(file) or file]
+  local files = breakpoints[line]
+  if not files then return false end
+  local filekey = iscasepreserving and string.lower(file) or file
+  local hit = files[filekey]
   if type(hit) == "function" then
     local env = capture_vars(2)
     setfenv(hit, env)
     local ok, res = pcall(hit, unpack(env['...'] or {}))
     if ok then return res end
+  elseif type(hit) == "number" then
+    files[filekey] = files[filekey] - 1
+    return files[filekey] <= 0
   end
   return hit
-  --return false
 end
 
 local function restore_vars(vars)
