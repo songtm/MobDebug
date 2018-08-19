@@ -1334,7 +1334,7 @@ local function handle(params, client, options)
         file = string.gsub(file, "\\", "/") -- convert slash
         file = removebasedir(file, basedir)
       end
-      client:send("SETB " .. file .. " " .. line .. "\n")
+      client:send("SETB " .. file .. " " .. line .. " " .. condition .. "\n")
       if command == "asetb" or client:receive() == "200 OK" then
         set_breakpoint(file, line, condition)
       else
