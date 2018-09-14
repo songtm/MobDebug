@@ -131,149 +131,149 @@ local function q(s) return string.gsub(s, '([%(%)%.%%%+%-%*%?%[%^%$%]])','%%%1')
 
 local serpent = (function() ---- include Serpent module for serialization
 local n, v = "serpent", "0.302" -- (C) 2012-18 Paul Kulchenko; MIT License
-local c, d = "Paul Kulchenko", "Lua serializer and pretty printer"
-local snum = {[tostring(1/0)]='1/0 --[[math.huge]]',[tostring(-1/0)]='-1/0 --[[-math.huge]]',[tostring(0/0)]='0/0'}
-local badtype = {thread = true, userdata = true, cdata = true}
-local getmetatable = debug and debug.getmetatable or getmetatable
-local pairs = function(t) return next, t end -- avoid using __pairs in Lua 5.2+
-local keyword, globals, G = {}, {}, (_G or _ENV)
-for _,k in ipairs({'and', 'break', 'do', 'else', 'elseif', 'end', 'false',
-  'for', 'function', 'goto', 'if', 'in', 'local', 'nil', 'not', 'or', 'repeat',
-  'return', 'then', 'true', 'until', 'while'}) do keyword[k] = true end
-for k,v in pairs(G) do globals[v] = k end -- build func to name mapping
-for _,g in ipairs({'coroutine', 'debug', 'io', 'math', 'string', 'table', 'os'}) do
-  for k,v in pairs(type(G[g]) == 'table' and G[g] or {}) do globals[v] = g..'.'..k end end
+  local c, d = "Paul Kulchenko", "Lua serializer and pretty printer"
+  local snum = {[tostring(1/0)]='1/0 --[[math.huge]]',[tostring(-1/0)]='-1/0 --[[-math.huge]]',[tostring(0/0)]='0/0'}
+  local badtype = {thread = true, userdata = true, cdata = true}
+  local getmetatable = debug and debug.getmetatable or getmetatable
+  local pairs = function(t) return next, t end -- avoid using __pairs in Lua 5.2+
+  local keyword, globals, G = {}, {}, (_G or _ENV)
+  for _,k in ipairs({'and', 'break', 'do', 'else', 'elseif', 'end', 'false',
+                     'for', 'function', 'goto', 'if', 'in', 'local', 'nil', 'not', 'or', 'repeat',
+                     'return', 'then', 'true', 'until', 'while'}) do keyword[k] = true end
+  for k,v in pairs(G) do globals[v] = k end -- build func to name mapping
+  for _,g in ipairs({'coroutine', 'debug', 'io', 'math', 'string', 'table', 'os'}) do
+    for k,v in pairs(type(G[g]) == 'table' and G[g] or {}) do globals[v] = g..'.'..k end end
 
-local function s(t, opts)
-  local name, indent, fatal, maxnum = opts.name, opts.indent, opts.fatal, opts.maxnum
-  local sparse, custom, huge = opts.sparse, opts.custom, not opts.nohuge
-  local space, maxl = (opts.compact and '' or ' '), (opts.maxlevel or math.huge)
-  local maxlen, metatostring = tonumber(opts.maxlength), opts.metatostring
-  local iname, comm = '_'..(name or ''), opts.comment and (tonumber(opts.comment) or math.huge)
-  local numformat = opts.numformat or "%.17g"
-  local seen, sref, syms, symn = {}, {'local '..iname..'={}'}, {}, 0
-  local function gensym(val) return '_'..(tostring(tostring(val)):gsub("[^%w]",""):gsub("(%d%w+)",
+  local function s(t, opts)
+    local name, indent, fatal, maxnum = opts.name, opts.indent, opts.fatal, opts.maxnum
+    local sparse, custom, huge = opts.sparse, opts.custom, not opts.nohuge
+    local space, maxl = (opts.compact and '' or ' '), (opts.maxlevel or math.huge)
+    local maxlen, metatostring = tonumber(opts.maxlength), opts.metatostring
+    local iname, comm = '_'..(name or ''), opts.comment and (tonumber(opts.comment) or math.huge)
+    local numformat = opts.numformat or "%.17g"
+    local seen, sref, syms, symn = {}, {'local '..iname..'={}'}, {}, 0
+    local function gensym(val) return '_'..(tostring(tostring(val)):gsub("[^%w]",""):gsub("(%d%w+)",
     -- tostring(val) is needed because __tostring may return a non-string value
-    function(s) if not syms[s] then symn = symn+1; syms[s] = symn end return tostring(syms[s]) end)) end
-  local function safestr(s) return type(s) == "number" and tostring(huge and snum[tostring(s)] or numformat:format(s))
-    or type(s) ~= "string" and tostring(s) -- escape NEWLINE/010 and EOF/026
-    or ("%q"):format(s):gsub("\010","n"):gsub("\026","\\026") end
-  local function comment(s,l) return comm and (l or 0) < comm and ' --[['..select(2, pcall(tostring, s))..']]' or '' end
-  local function globerr(s,l) return globals[s] and globals[s]..comment(s,l) or not fatal
-    and safestr(select(2, pcall(tostring, s))) or error("Can't serialize "..tostring(s)) end
-  local function safename(path, name) -- generates foo.bar, foo[3], or foo['b a r']
-    local n = name == nil and '' or name
-    local plain = type(n) == "string" and n:match("^[%l%u_][%w_]*$") and not keyword[n]
-    local safe = plain and n or '['..safestr(n)..']'
-    return (path or '')..(plain and path and '.' or '')..safe, safe end
-  local alphanumsort = type(opts.sortkeys) == 'function' and opts.sortkeys or function(k, o, n) -- k=keys, o=originaltable, n=padding
-    local maxn, to = tonumber(n) or 12, {number = 'a', string = 'b'}
-    local function padnum(d) return ("%0"..tostring(maxn).."d"):format(tonumber(d)) end
-    table.sort(k, function(a,b)
-      -- sort numeric keys first: k[key] is not nil for numerical keys
-      return (k[a] ~= nil and 0 or to[type(a)] or 'z')..(tostring(a):gsub("%d+",padnum))
-           < (k[b] ~= nil and 0 or to[type(b)] or 'z')..(tostring(b):gsub("%d+",padnum)) end) end
-  local function val2str(t, name, indent, insref, path, plainindex, level)
-    local ttype, level, mt = type(t), (level or 0), getmetatable(t)
-    local spath, sname = safename(path, name)
-    local tag = plainindex and
-      ((type(name) == "number") and '' or name..space..'='..space) or
-      (name ~= nil and sname..space..'='..space or '')
-    if seen[t] then -- already seen this element
-      sref[#sref+1] = spath..space..'='..space..seen[t]
-      return tag..'nil'..comment('ref', level) end
-    -- protect from those cases where __tostring may fail
-    if type(mt) == 'table' and metatostring ~= false then
-      local to, tr = pcall(function() return mt.__tostring(t) end)
-      local so, sr = pcall(function() return mt.__serialize(t) end)
-      if (to or so) then -- knows how to serialize itself
+            function(s) if not syms[s] then symn = symn+1; syms[s] = symn end return tostring(syms[s]) end)) end
+    local function safestr(s) return type(s) == "number" and tostring(huge and snum[tostring(s)] or numformat:format(s))
+            or type(s) ~= "string" and tostring(s) -- escape NEWLINE/010 and EOF/026
+            or ("%q"):format(s):gsub("\010","n"):gsub("\026","\\026") end
+    local function comment(s,l) return comm and (l or 0) < comm and ' --[['..select(2, pcall(tostring, s))..']]' or '' end
+    local function globerr(s,l) return globals[s] and globals[s]..comment(s,l) or not fatal
+            and safestr(select(2, pcall(tostring, s))) or error("Can't serialize "..tostring(s)) end
+    local function safename(path, name) -- generates foo.bar, foo[3], or foo['b a r']
+      local n = name == nil and '' or name
+      local plain = type(n) == "string" and n:match("^[%l%u_][%w_]*$") and not keyword[n]
+      local safe = plain and n or '['..safestr(n)..']'
+      return (path or '')..(plain and path and '.' or '')..safe, safe end
+    local alphanumsort = type(opts.sortkeys) == 'function' and opts.sortkeys or function(k, o, n) -- k=keys, o=originaltable, n=padding
+      local maxn, to = tonumber(n) or 12, {number = 'a', string = 'b'}
+      local function padnum(d) return ("%0"..tostring(maxn).."d"):format(tonumber(d)) end
+      table.sort(k, function(a,b)
+        -- sort numeric keys first: k[key] is not nil for numerical keys
+        return (k[a] ~= nil and 0 or to[type(a)] or 'z')..(tostring(a):gsub("%d+",padnum))
+                < (k[b] ~= nil and 0 or to[type(b)] or 'z')..(tostring(b):gsub("%d+",padnum)) end) end
+    local function val2str(t, name, indent, insref, path, plainindex, level)
+      local ttype, level, mt = type(t), (level or 0), getmetatable(t)
+      local spath, sname = safename(path, name)
+      local tag = plainindex and
+              ((type(name) == "number") and '' or name..space..'='..space) or
+              (name ~= nil and sname..space..'='..space or '')
+      if seen[t] then -- already seen this element
+        sref[#sref+1] = spath..space..'='..space..seen[t]
+        return tag..'nil'..comment('ref', level) end
+      -- protect from those cases where __tostring may fail
+      if type(mt) == 'table' and metatostring ~= false then
+        local to, tr = pcall(function() return mt.__tostring(t) end)
+        local so, sr = pcall(function() return mt.__serialize(t) end)
+        if (to or so) then -- knows how to serialize itself
+          seen[t] = insref or spath
+          t = so and sr or tr
+          ttype = type(t)
+        end -- new value falls through to be serialized
+      end
+      if ttype == "table" then
+        if level >= maxl then return tag..'{}'..comment('maxlvl', level) end
         seen[t] = insref or spath
-        t = so and sr or tr
-        ttype = type(t)
-      end -- new value falls through to be serialized
-    end
-    if ttype == "table" then
-      if level >= maxl then return tag..'{}'..comment('maxlvl', level) end
-      seen[t] = insref or spath
-      if next(t) == nil then return tag..'{}'..comment(t, level) end -- table empty
-      if maxlen and maxlen < 0 then return tag..'{}'..comment('maxlen', level) end
-      local maxn, o, out = math.min(#t, maxnum or #t), {}, {}
-      for key = 1, maxn do o[key] = key end
-      if not maxnum or #o < maxnum then
-        local n = #o -- n = n + 1; o[n] is much faster than o[#o+1] on large tables
-        for key in pairs(t) do if o[key] ~= key then n = n + 1; o[n] = key end end end
-      if maxnum and #o > maxnum then o[maxnum+1] = nil end
-      if opts.sortkeys and #o > maxn then alphanumsort(o, t, opts.sortkeys) end
-      local sparse = sparse and #o > maxn -- disable sparsness if only numeric keys (shorter output)
-      for n, key in ipairs(o) do
-        local value, ktype, plainindex = t[key], type(key), n <= maxn and not sparse
-        if opts.valignore and opts.valignore[value] -- skip ignored values; do nothing
-        or opts.keyallow and not opts.keyallow[key]
-        or opts.keyignore and opts.keyignore[key]
-        or opts.valtypeignore and opts.valtypeignore[type(value)] -- skipping ignored value types
-        or sparse and value == nil then -- skipping nils; do nothing
-        elseif ktype == 'table' or ktype == 'function' or badtype[ktype] then
-          if not seen[key] and not globals[key] then
+        if next(t) == nil then return tag..'{}'..comment(t, level) end -- table empty
+        if maxlen and maxlen < 0 then return tag..'{}'..comment('maxlen', level) end
+        local maxn, o, out = math.min(#t, maxnum or #t), {}, {}
+        for key = 1, maxn do o[key] = key end
+        if not maxnum or #o < maxnum then
+          local n = #o -- n = n + 1; o[n] is much faster than o[#o+1] on large tables
+          for key in pairs(t) do if o[key] ~= key then n = n + 1; o[n] = key end end end
+        if maxnum and #o > maxnum then o[maxnum+1] = nil end
+        if opts.sortkeys and #o > maxn then alphanumsort(o, t, opts.sortkeys) end
+        local sparse = sparse and #o > maxn -- disable sparsness if only numeric keys (shorter output)
+        for n, key in ipairs(o) do
+          local value, ktype, plainindex = t[key], type(key), n <= maxn and not sparse
+          if opts.valignore and opts.valignore[value] -- skip ignored values; do nothing
+                  or opts.keyallow and not opts.keyallow[key]
+                  or opts.keyignore and opts.keyignore[key]
+                  or opts.valtypeignore and opts.valtypeignore[type(value)] -- skipping ignored value types
+                  or sparse and value == nil then -- skipping nils; do nothing
+          elseif ktype == 'table' or ktype == 'function' or badtype[ktype] then
+            if not seen[key] and not globals[key] then
+              sref[#sref+1] = 'placeholder'
+              local sname = safename(iname, gensym(key)) -- iname is table for local variables
+              sref[#sref] = val2str(key,sname,indent,sname,iname,true) end
             sref[#sref+1] = 'placeholder'
-            local sname = safename(iname, gensym(key)) -- iname is table for local variables
-            sref[#sref] = val2str(key,sname,indent,sname,iname,true) end
-          sref[#sref+1] = 'placeholder'
-          local path = seen[t]..'['..tostring(seen[key] or globals[key] or gensym(key))..']'
-          sref[#sref] = path..space..'='..space..tostring(seen[value] or val2str(value,nil,indent,path))
-        else
-          out[#out+1] = val2str(value,key,indent,nil,seen[t],plainindex,level+1)
-          if maxlen then
-            maxlen = maxlen - #out[#out]
-            if maxlen < 0 then break end
+            local path = seen[t]..'['..tostring(seen[key] or globals[key] or gensym(key))..']'
+            sref[#sref] = path..space..'='..space..tostring(seen[value] or val2str(value,nil,indent,path))
+          else
+            out[#out+1] = val2str(value,key,indent,nil,seen[t],plainindex,level+1)
+            if maxlen then
+              maxlen = maxlen - #out[#out]
+              if maxlen < 0 then break end
+            end
           end
         end
-      end
-      local prefix = string.rep(indent or '', level)
-      local head = indent and '{\n'..prefix..indent or '{'
-      local body = table.concat(out, ','..(indent and '\n'..prefix..indent or space))
-      local tail = indent and "\n"..prefix..'}' or '}'
-      return (custom and custom(tag,head,body,tail,level) or tag..head..body..tail)..comment(t, level)
-    elseif badtype[ttype] then
-      seen[t] = insref or spath
-      return tag..globerr(t, level)
-    elseif ttype == 'function' then
-      seen[t] = insref or spath
-      -- if opts.nocode then return tag.."function() --[[..skipped..]] end"..comment(t, level) end
-      if opts.nocode then --songtm:the debugger can get the function's source pos(so can jump to definition)
-        local source = debug.getinfo(t, "Snl")
-        return tag .. "function() return \""..source.short_src..":"..source.linedefined.."\" end" .. comment(t, level)
-      end
-      local ok, res = pcall(string.dump, t)
-      local func = ok and "((loadstring or load)("..safestr(res)..",'@serialized'))"..comment(t, level)
-      return tag..(func or globerr(t, level))
-    else return tag..safestr(t) end -- handle all other types
+        local prefix = string.rep(indent or '', level)
+        local head = indent and '{\n'..prefix..indent or '{'
+        local body = table.concat(out, ','..(indent and '\n'..prefix..indent or space))
+        local tail = indent and "\n"..prefix..'}' or '}'
+        return (custom and custom(tag,head,body,tail,level) or tag..head..body..tail)..comment(t, level)
+      elseif badtype[ttype] then
+        seen[t] = insref or spath
+        return tag..globerr(t, level)
+      elseif ttype == 'function' then
+        seen[t] = insref or spath
+        -- if opts.nocode then return tag.."function() --[[..skipped..]] end"..comment(t, level) end
+        if opts.nocode then --songtm:the debugger can get the function's source pos(so can jump to definition)
+          local source = debug.getinfo(t, "Snl")
+          return tag .. "function() return \""..source.short_src..":"..source.linedefined.."\" end" .. comment(t, level)
+        end
+        local ok, res = pcall(string.dump, t)
+        local func = ok and "((loadstring or load)("..safestr(res)..",'@serialized'))"..comment(t, level)
+        return tag..(func or globerr(t, level))
+      else return tag..safestr(t) end -- handle all other types
+    end
+    local sepr = indent and "\n" or ";"..space
+    local body = val2str(t, name, indent) -- this call also populates sref
+    local tail = #sref>1 and table.concat(sref, sepr)..sepr or ''
+    local warn = opts.comment and #sref>1 and space.."--[[incomplete output with shared/self-references skipped]]" or ''
+    return not name and body..warn or "do local "..body..sepr..tail.."return "..name..sepr.."end"
   end
-  local sepr = indent and "\n" or ";"..space
-  local body = val2str(t, name, indent) -- this call also populates sref
-  local tail = #sref>1 and table.concat(sref, sepr)..sepr or ''
-  local warn = opts.comment and #sref>1 and space.."--[[incomplete output with shared/self-references skipped]]" or ''
-  return not name and body..warn or "do local "..body..sepr..tail.."return "..name..sepr.."end"
-end
 
-local function deserialize(data, opts)
-  local env = (opts and opts.safe == false) and G
-    or setmetatable({}, {
-        __index = function(t,k) return t end,
-        __call = function(t,...) error("cannot call functions") end
-      })
-  local f, res = (loadstring or load)('return '..data, nil, nil, env)
-  if not f then f, res = (loadstring or load)(data, nil, nil, env) end
-  if not f then return f, res end
-  if setfenv then setfenv(f, env) end
-  return pcall(f)
-end
+  local function deserialize(data, opts)
+    local env = (opts and opts.safe == false) and G
+            or setmetatable({}, {
+      __index = function(t,k) return t end,
+      __call = function(t,...) error("cannot call functions") end
+    })
+    local f, res = (loadstring or load)('return '..data, nil, nil, env)
+    if not f then f, res = (loadstring or load)(data, nil, nil, env) end
+    if not f then return f, res end
+    if setfenv then setfenv(f, env) end
+    return pcall(f)
+  end
 
-local function merge(a, b) if b then for k,v in pairs(b) do a[k] = v end end; return a; end
-return { _NAME = n, _COPYRIGHT = c, _DESCRIPTION = d, _VERSION = v, serialize = s,
-  load = deserialize,
-  dump = function(a, opts) return s(a, merge({name = '_', compact = true, sparse = true}, opts)) end,
-  line = function(a, opts) return s(a, merge({sortkeys = true, comment = true}, opts)) end,
-  block = function(a, opts) return s(a, merge({indent = '  ', sortkeys = true, comment = true}, opts)) end }
+  local function merge(a, b) if b then for k,v in pairs(b) do a[k] = v end end; return a; end
+  return { _NAME = n, _COPYRIGHT = c, _DESCRIPTION = d, _VERSION = v, serialize = s,
+           load = deserialize,
+           dump = function(a, opts) return s(a, merge({name = '_', compact = true, sparse = true}, opts)) end,
+           line = function(a, opts) return s(a, merge({sortkeys = true, comment = true}, opts)) end,
+           block = function(a, opts) return s(a, merge({indent = '  ', sortkeys = true, comment = true}, opts)) end }
 end)() ---- end of Serpent module
 
 mobdebug.line = serpent.line
@@ -286,7 +286,7 @@ local function removebasedir(path, basedir)
     -- check if the lowercased path matches the basedir
     -- if so, return substring of the original path (to not lowercase it)
     return path:lower():find('^'..q(basedir:lower()))
-      and path:sub(#basedir+1) or path
+            and path:sub(#basedir+1) or path
   else
     return string.gsub(path, '^'..q(basedir), '')
   end
@@ -350,11 +350,14 @@ local function stack(start)
   return stack
 end
 
-local function set_breakpoint(file, line)
+local function set_breakpoint(file, line, condition)
   if file == '-' and lastfile then file = lastfile
   elseif iscasepreserving then file = string.lower(file) end
   if not breakpoints[line] then breakpoints[line] = {} end
-  breakpoints[line][file] = true
+  if condition ~= nil and condition ~= "" then
+    condition = tonumber(condition) and tonumber(condition) or loadstring("return "..condition)
+  else condition = nil end
+  breakpoints[line][file] = condition and  condition or true
 end
 
 local function remove_breakpoint(file, line)
@@ -362,11 +365,26 @@ local function remove_breakpoint(file, line)
   elseif file == '*' and line == 0 then breakpoints = {}
   elseif iscasepreserving then file = string.lower(file) end
   if breakpoints[line] then breakpoints[line][file] = nil end
+  --for fast has_breakpoint check
+  if breakpoints[line] and next(breakpoints[line]) == nil then breakpoints[line] = nil end
 end
 
+local capture_vars
 local function has_breakpoint(file, line)
-  return breakpoints[line]
-     and breakpoints[line][iscasepreserving and string.lower(file) or file]
+  local files = breakpoints[line]
+  if not files then return false end
+  local filekey = iscasepreserving and string.lower(file) or file
+  local hit = files[filekey]
+  if type(hit) == "function" then
+    local env = capture_vars(2)
+    setfenv(hit, env)
+    local ok, res = pcall(hit, unpack(env['...'] or {}))
+    if ok then return res end
+  elseif type(hit) == "number" then
+    files[filekey] = files[filekey] - 1
+    return files[filekey] <= 0
+  end
+  return hit
 end
 
 local function restore_vars(vars)
@@ -412,7 +430,7 @@ local function restore_vars(vars)
   end
 end
 
-local function capture_vars(level, thread)
+capture_vars = function (level, thread)
   level = (level or 0)+2 -- add two levels for this and debug calls
   local func = (thread and debug.getinfo(thread, level, "f") or debug.getinfo(level, "f") or {}).func
   if not func then return {} end
@@ -530,8 +548,8 @@ local function handle_breakpoint(peer)
     return
   end
 
-  local _, _, cmd, file, line = (buf..res):find("^([A-Z]+)%s+(.-)%s+(%d+)%s*$")
-  if cmd == 'SETB' then set_breakpoint(file, tonumber(line))
+  local _, _, cmd, file, line, condition = (buf..res):find("^([A-Z]+)%s+(.-)%s+(%d+)%s*(.-)$")
+  if cmd == 'SETB' then set_breakpoint(file, tonumber(line), condition)
   elseif cmd == 'DELB' then remove_breakpoint(file, tonumber(line))
   else
     -- this looks like a breakpoint command, but something went wrong;
@@ -576,7 +594,7 @@ local function debug_hook(event, line)
     local coro, main = coroutine.running()
     if not coro or main then coro = 'main' end
     local disabled = coroutines[coro] == false
-      or coroutines[coro] == nil and coro ~= (coro_debugee or 'main')
+            or coroutines[coro] == nil and coro ~= (coro_debugee or 'main')
     if coro_debugee and disabled or not coro_debugee and (disabled or in_debugger())
     then return end
   end
@@ -607,8 +625,8 @@ local function debug_hook(event, line)
     -- (4) socket call (only do every Xth check)
     -- (5) at least one watch is registered
     if not (
-      step_into or step_over or breakpoints[line] or watchescnt > 0
-      or is_pending(server)
+            step_into or step_over or breakpoints[line] or watchescnt > 0
+                    or is_pending(server)
     ) then checkcount = checkcount + 1; return end
 
     checkcount = mobdebug.checkcount -- force check on the next command
@@ -682,12 +700,12 @@ local function debug_hook(event, line)
     -- need to get into the "regular" debug handler, but only if there was
     -- no watch that was fired. If there was a watch, handle its result.
     local getin = (status == nil) and
-      (step_into
-      -- when coroutine.running() return `nil` (main thread in Lua 5.1),
-      -- step_over will equal 'main', so need to check for that explicitly.
-      or (step_over and step_over == (coroutine.running() or 'main') and stack_level <= step_level)
-      or has_breakpoint(file, line)
-      or is_pending(server))
+            (step_into
+                    -- when coroutine.running() return `nil` (main thread in Lua 5.1),
+                    -- step_over will equal 'main', so need to check for that explicitly.
+                    or (step_over and step_over == (coroutine.running() or 'main') and stack_level <= step_level)
+                    or has_breakpoint(file, line)
+                    or is_pending(server))
 
     if getin then
       vars = vars or capture_vars(1)
@@ -812,9 +830,9 @@ local function debugger_loop(sev, svars, sfile, sline)
     if server.settimeout then server:settimeout() end -- back to blocking
     command = string.sub(line, string.find(line, "^[A-Z]+"))
     if command == "SETB" then
-      local _, _, _, file, line = string.find(line, "^([A-Z]+)%s+(.-)%s+(%d+)%s*$")
+      local _, _, _, file, line, condition = string.find(line, "^([A-Z]+)%s+(.-)%s+(%d+)%s*(.-)$")
       if file and line then
-        set_breakpoint(file, tonumber(line))
+        set_breakpoint(file, tonumber(line), condition)
         server:send("200 OK\n")
       else
         server:send("400 Bad Request\n")
@@ -1130,7 +1148,7 @@ local function start(controller_host, controller_port)
     return true
   else
     print(("Could not connect to %s:%s: %s")
-      :format(controller_host, controller_port, err or "unknown error"))
+            :format(controller_host, controller_port, err or "unknown error"))
   end
 end
 
@@ -1200,7 +1218,7 @@ local function controller(controller_host, controller_port, scratchpad)
     end
   else
     print(("Could not connect to %s:%s: %s")
-      :format(controller_host, controller_port, err or "unknown error"))
+            :format(controller_host, controller_port, err or "unknown error"))
     return false
   end
   return true
@@ -1267,7 +1285,7 @@ local function handle(params, client, options)
   local file, line, watch_idx
   local _, _, command = string.find(params, "^([a-z]+)")
   if command == "run" or command == "step" or command == "out"
-  or command == "over" or command == "exit" then
+          or command == "over" or command == "exit" then
     client:send(string.upper(command) .. "\n")
     client:receive() -- this should consume the first '200 OK' response
     while true do
@@ -1317,16 +1335,16 @@ local function handle(params, client, options)
     client:send(string.upper(command) .. "\n")
     -- no response is expected
   elseif command == "setb" or command == "asetb" then
-    _, _, _, file, line = string.find(params, "^([a-z]+)%s+(.-)%s+(%d+)%s*$")
+    _, _, _, file, line, condition = string.find(params, "^([a-z]+)%s+(.-)%s+(%d+)%s*(.-)$")
     if file and line then
       -- if this is a file name, and not a file source
       if not file:find('^".*"$') then
         file = string.gsub(file, "\\", "/") -- convert slash
         file = removebasedir(file, basedir)
       end
-      client:send("SETB " .. file .. " " .. line .. "\n")
+      client:send("SETB " .. file .. " " .. line .. " " .. condition .. "\n")
       if command == "asetb" or client:receive() == "200 OK" then
-        set_breakpoint(file, line)
+        set_breakpoint(file, line, condition)
       else
         print("Error: breakpoint not inserted")
       end
@@ -1401,8 +1419,8 @@ local function handle(params, client, options)
       end
     end
   elseif command == "eval" or command == "exec"
-      or command == "load" or command == "loadstring"
-      or command == "reload" then
+          or command == "load" or command == "loadstring"
+          or command == "reload" then
     local _, _, exp = string.find(params, "^[a-z]+%s+(.+)$")
     if exp or (command == "reload") then
       if command == "eval" or command == "exec" then
@@ -1416,7 +1434,7 @@ local function handle(params, client, options)
       elseif command == "loadstring" then
         local _, _, _, file, lines = string.find(exp, "^([\"'])(.-)%1%s(.+)")
         if not file then
-           _, _, file, lines = string.find(exp, "^(%S+)%s(.+)")
+          _, _, file, lines = string.find(exp, "^(%S+)%s(.+)")
         end
         client:send("LOAD " .. tostring(#lines) .. " " .. file .. "\n")
         client:send(lines)
@@ -1551,7 +1569,7 @@ local function handle(params, client, options)
       if status == "200" then
         print("Stream "..stream.." redirected")
         outputs[stream] = type(options) == 'table' and options.handler or nil
-      -- the client knows when she is doing, so install the handler
+        -- the client knows when she is doing, so install the handler
       elseif type(options) == 'table' and options.handler then
         outputs[stream] = options.handler
       else
@@ -1588,7 +1606,7 @@ local function handle(params, client, options)
       print(basedir)
     end
   elseif command == "help" then
-    print("setb <file> <line>    -- sets a breakpoint")
+    print("setb <file> <line> [<conditionExp>]   -- sets a breakpoint")
     print("delb <file> <line>    -- removes a breakpoint")
     print("delallb               -- removes all breakpoints")
     print("setw <exp>            -- adds a new watch expression")
